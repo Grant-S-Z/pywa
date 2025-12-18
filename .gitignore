@@ -1,0 +1,8 @@
+plots/
+output/
+backup/
+data/
+log/
+.DS_Store
+note.*
+wavelike/__pycache__/
