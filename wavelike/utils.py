@@ -32,7 +32,7 @@ def timer(func):
         value = func(*args, **kwargs)
         end_time = time()
         run_time = end_time - start_time
-        print(f"[TIMER] >>> {func.__name__!r} took: {run_time:.2f} s")
+        print(f"[TIMER] >>> {func.__name__!r} took: {run_time:.4f} s")
         # print(f"⏱️: {func.__name__!r} finished in {run_time:.2f} s")
         # print(f"@timer -> f {func.__name__!r} took: {run_time:.2f} secs")
         return value

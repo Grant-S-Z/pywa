@@ -20,7 +20,7 @@ def get_pedestal(arr: np.ndarray, nbegin: int = bl_begin, nend: int = bl_end) ->
     -------
     float
         Pedestal
-    """    
+    """
     nbegin = max(0, nbegin)
     nend = min(window_size, nend)
     if nend <= nbegin:
@@ -28,7 +28,41 @@ def get_pedestal(arr: np.ndarray, nbegin: int = bl_begin, nend: int = bl_end) ->
     return np.mean(arr[nbegin:nend]).item()
 
 
-def get_pedestal_batch(arr_batch: torch.Tensor, nbegin: int = bl_begin, nend: int = bl_end) -> torch.Tensor:
+def get_pedestal_efficient(arr: np.ndarray, nbegin: int = 0, nend: int = 110,
+                           low_bound: float = 900, high_bound: float = 980) -> float:
+    """
+    更高效的版本：直接使用直方图找主峰
+    """
+    nbegin = max(0, nbegin)
+    nend = min(len(arr), nend)
+    if nend <= nbegin:
+        return np.mean(arr).item()
+
+    data = arr[nbegin:nend]
+
+    # 筛选有效范围
+    mask = (data >= low_bound) & (data <= high_bound)
+    filtered = data[mask]
+
+    if len(filtered) == 0:
+        return np.mean(data).item()
+
+    # 使用直方图找到主峰位置
+    hist, bins = np.histogram(filtered, bins=50)
+    peak_bin = np.argmax(hist)
+    baseline_guess = (bins[peak_bin] + bins[peak_bin + 1]) / 2
+
+    # 取基线附近 ±4 的点平均
+    mask2 = np.abs(filtered - baseline_guess) < 4
+    if np.sum(mask2) > 0:
+        return np.mean(filtered[mask2]).item()
+    else:
+        return baseline_guess
+
+
+def get_pedestal_batch(
+    arr_batch: torch.Tensor, nbegin: int = bl_begin, nend: int = bl_end
+) -> torch.Tensor:
     """Get the pedestal of waveform batch
 
     Parameters
@@ -42,7 +76,7 @@ def get_pedestal_batch(arr_batch: torch.Tensor, nbegin: int = bl_begin, nend: in
     -------
     torch.Tensor (B)
         Pedestal batch
-    """    
+    """
     nbegin = max(0, nbegin)
     nend = min(window_size, nend)
     if nend <= nbegin:
@@ -50,7 +84,9 @@ def get_pedestal_batch(arr_batch: torch.Tensor, nbegin: int = bl_begin, nend: in
     return torch.mean(arr_batch[..., nbegin:nend], dim=-1)
 
 
-def get_charge(arr: np.ndarray, ped: float, nbegin: int = inte_begin, nend: int = inte_end) -> float:
+def get_charge(
+    arr: np.ndarray, ped: float, nbegin: int = inte_begin, nend: int = inte_end
+) -> float:
     """Get charge
 
     Parameters
@@ -68,7 +104,7 @@ def get_charge(arr: np.ndarray, ped: float, nbegin: int = inte_begin, nend: int 
     -------
     float
         Charge
-    """    
+    """
     nbegin = max(0, nbegin)
     nend = min(window_size, nend)
     if nend <= nbegin:
@@ -77,7 +113,12 @@ def get_charge(arr: np.ndarray, ped: float, nbegin: int = inte_begin, nend: int 
     return -charge
 
 
-def get_charge_batch(arr_batch: torch.Tensor, ped_batch: torch.Tensor, nbegin: int = inte_begin, nend: int = inte_end) -> torch.Tensor:
+def get_charge_batch(
+    arr_batch: torch.Tensor,
+    ped_batch: torch.Tensor,
+    nbegin: int = inte_begin,
+    nend: int = inte_end,
+) -> torch.Tensor:
     """Get charge batch
 
     Parameters
@@ -95,17 +136,20 @@ def get_charge_batch(arr_batch: torch.Tensor, ped_batch: torch.Tensor, nbegin: i
     -------
     torch.Tensor (B)
         Charge batch
-    """    
+    """
     nbegin = max(0, nbegin)
     nend = min(window_size, nend)
     if nend <= nbegin:
         return torch.zeros(arr_batch.shape[:-1], dtype=arr_batch.dtype)
-    charges = torch.sum(arr_batch[..., nbegin:nend],
-                        dim=-1) - ped_batch * (nend - nbegin)
+    charges = torch.sum(arr_batch[..., nbegin:nend], dim=-1) - ped_batch * (
+        nend - nbegin
+    )
     return -charges
 
 
-def get_noise(arr: np.ndarray, ped: float, nbegin: int = bl_begin, nend: int = bl_end) -> float:
+def get_noise(
+    arr: np.ndarray, ped: float, nbegin: int = bl_begin, nend: int = bl_end
+) -> float:
     """Get noise sigma
 
     Parameters
@@ -130,7 +174,12 @@ def get_noise(arr: np.ndarray, ped: float, nbegin: int = bl_begin, nend: int = b
     return noise_sigma
 
 
-def get_noise_batch(arr_batch: torch.Tensor, ped_batch: torch.Tensor, nbegin: int = bl_begin, nend: int = bl_end) -> torch.Tensor:
+def get_noise_batch(
+    arr_batch: torch.Tensor,
+    ped_batch: torch.Tensor,
+    nbegin: int = bl_begin,
+    nend: int = bl_end,
+) -> torch.Tensor:
     """Get noise sigma batch
 
     Parameters
@@ -152,15 +201,20 @@ def get_noise_batch(arr_batch: torch.Tensor, ped_batch: torch.Tensor, nbegin: in
     if nend <= nbegin:
         nend = min(100, arr_batch.shape[-1])
     noise_sigma_batch = torch.std(
-        arr_batch[..., nbegin:nend] - ped_batch.unsqueeze(-1), dim=-1)
+        arr_batch[..., nbegin:nend] - ped_batch.unsqueeze(-1), dim=-1
+    )
     return noise_sigma_batch
 
 
-def lucyddm(waveform: np.ndarray,
-            ser: np.ndarray,
-            n_iter: int = 2000,
-            eps: float = 1e-6) -> np.ndarray:
-    """RL deconvolution
+def lucyddm(
+    waveform: np.ndarray,
+    ser: np.ndarray,
+    n_iter: int = 2000,
+    eps: float = 1e-6,
+    tol: float = 1e-4,
+    check_interval: int = 50,
+) -> np.ndarray:
+    """RL deconvolution with early stopping.
 
     Parameters
     ----------
@@ -169,9 +223,13 @@ def lucyddm(waveform: np.ndarray,
     ser : np.ndarray (S)
         Single photoelectron response
     n_iter : int, optional
-        Iteration, by default 2000
+        Maximum iterations, by default 2000
     eps : float, optional
         Minimum, by default 1e-6
+    tol : float, optional
+        Relative change tolerance for early stopping, by default 1e-4
+    check_interval : int, optional
+        Check convergence every N iterations, by default 50
 
     Returns
     -------
@@ -186,27 +244,41 @@ def lucyddm(waveform: np.ndarray,
     ser = np.clip(ser, a_min=eps, a_max=None)
 
     deconv = np.full((L,), fill_value=eps, dtype=waveform.dtype)
-    deconv[S - 1:] = waveform
-    
+    deconv[S - 1 :] = waveform
+
     ser_mirror = ser[::-1]
     ser_rfft = np.fft.rfft(ser, n=L)
     ser_mirror_rfft = np.fft.rfft(ser_mirror, n=L)
 
+    deconv_prev = deconv.copy()
     for i in range(n_iter):
-        conv_result = np.fft.irfft(np.fft.rfft(
-            deconv, n=L) * ser_rfft, n=L)
-        relative_blur = waveform / conv_result[S - 1:]
-        correction = np.fft.irfft(np.fft.rfft(
-            relative_blur, n=L) * ser_mirror_rfft, n=L)
+        conv_result = np.fft.irfft(np.fft.rfft(deconv, n=L) * ser_rfft, n=L)
+        conv_result = np.clip(conv_result, a_min=eps, a_max=None)
+        relative_blur = waveform / conv_result[S - 1 :]
+        correction = np.fft.irfft(
+            np.fft.rfft(relative_blur, n=L) * ser_mirror_rfft, n=L
+        )
         deconv *= correction
+
+        if (i + 1) % check_interval == 0:
+            region = deconv[S - 1 : S - 1 + W]
+            prev = deconv_prev[S - 1 : S - 1 + W]
+            mean_amp = np.mean(prev)
+            if mean_amp > eps:
+                change = np.mean(np.abs(region - prev)) / mean_amp
+                if change < tol:
+                    return deconv
+            deconv_prev = deconv.copy()
 
     return deconv
 
 
-def lucyddm_batch(waveform_batch: torch.Tensor,
-                  ser_batch: torch.Tensor,
-                  n_iter: int = 2000,
-                  eps: float = 1e-6) -> torch.Tensor:
+def lucyddm_batch(
+    waveform_batch: torch.Tensor,
+    ser_batch: torch.Tensor,
+    n_iter: int = 2000,
+    eps: float = 1e-6,
+) -> torch.Tensor:
     """Batched RL deconvolution using PyTorch
 
     Parameters
@@ -233,8 +305,9 @@ def lucyddm_batch(waveform_batch: torch.Tensor,
     ser_batch = torch.clamp(ser_batch, min=eps)
 
     deconv_batch = torch.full(
-        (B, L), fill_value=eps, dtype=waveform_batch.dtype, device=waveform_batch.device)
-    deconv_batch[:, S - 1:] = waveform_batch
+        (B, L), fill_value=eps, dtype=waveform_batch.dtype, device=waveform_batch.device
+    )
+    deconv_batch[:, S - 1 :] = waveform_batch
     # deconv_batch[:, C : C + W] = waveform_batch
 
     ser_mirror_batch = torch.flip(ser_batch, dims=[1])
@@ -244,22 +317,26 @@ def lucyddm_batch(waveform_batch: torch.Tensor,
 
     for i in range(n_iter):
         # conv_result = torch.clamp(torch.fft.irfft(torch.fft.rfft(deconv_batch, n=L) * ser_rfft_batch, n=L), min=eps)
-        conv_result = torch.fft.irfft(torch.fft.rfft(
-            deconv_batch, n=L) * ser_rfft_batch, n=L)
+        conv_result = torch.fft.irfft(
+            torch.fft.rfft(deconv_batch, n=L) * ser_rfft_batch, n=L
+        )
         # relative_blur = waveform_batch / conv_result[:, C : C + W]
-        relative_blur = waveform_batch / conv_result[:, S - 1:]
+        relative_blur = waveform_batch / conv_result[:, S - 1 :]
         # correction = torch.clamp(torch.fft.irfft(torch.fft.rfft(relative_blur, n=L) * ser_mirror_rfft_batch, n=L), min=eps)
-        correction = torch.fft.irfft(torch.fft.rfft(
-            relative_blur, n=L) * ser_mirror_rfft_batch, n=L)
+        correction = torch.fft.irfft(
+            torch.fft.rfft(relative_blur, n=L) * ser_mirror_rfft_batch, n=L
+        )
         deconv_batch *= correction
 
     return deconv_batch
 
 
-def prior(waveform: np.ndarray,
-          threshold: float = 0.15,
-          min_distance: int = 5,
-          max_pe: int = max_pe) -> np.ndarray:
+def prior(
+    waveform: np.ndarray,
+    threshold: float = 0.15,
+    min_distance: int = 3,
+    max_pe: int = max_pe,
+) -> np.ndarray:
     """Clip and cluster deconvolved waveform to give prior PE (NumPy version)
 
     Parameters
@@ -269,7 +346,7 @@ def prior(waveform: np.ndarray,
     threshold : float, optional
         Clip threshold, by default 0.15
     min_distance : int, optional
-        Minimum distance between peaks, by default 5
+        Minimum distance between peaks, by default 3
         (e.g., 5 means peaks must be separated by at least 5 // 2 = 2 zero samples)
     max_pe : int, optional
         Maximum number of PE, by default 200
@@ -282,20 +359,24 @@ def prior(waveform: np.ndarray,
     """
     # 1. Charge map: Sliding sum using convolution
     # mode='same' ensures the output size matches input and is centered
-    charge_map = np.convolve(waveform, np.ones(min_distance, dtype=waveform.dtype), mode='same')
+    charge_map = np.convolve(
+        waveform, np.ones(min_distance, dtype=waveform.dtype), mode="same"
+    )
 
     # 2. Minimum distance suppression: Sliding max (Max Pooling)
     # Pad input to handle boundaries similar to 'same' padding
     pad_width = min_distance // 2
-    padded_wave = np.pad(waveform, (pad_width, pad_width), mode='constant', constant_values=0)
-    
+    padded_wave = np.pad(
+        waveform, (pad_width, pad_width), mode="constant", constant_values=0
+    )
+
     # Create sliding windows (requires numpy >= 1.20)
     windows = np.lib.stride_tricks.sliding_window_view(padded_wave, min_distance)
     s_map_padded = np.max(windows, axis=-1)
 
     # Handle potential shape mismatch if min_distance is even
     if s_map_padded.shape[0] > waveform.shape[0]:
-        s_map_padded = s_map_padded[:waveform.shape[0]]
+        s_map_padded = s_map_padded[: waveform.shape[0]]
 
     # 3. NMS Mask: Compare waveform with local max
     # Use isclose for robust float comparison
@@ -313,21 +394,21 @@ def prior(waveform: np.ndarray,
     # 5. Select Top-K
     # Use argpartition for efficiency, then sort the top k results by amplitude descending
     top_indices = np.argpartition(-prior_weights, k_final - 1)[:k_final]
-    
+
     # Sort selected indices by amplitude (descending)
     order = np.argsort(-prior_weights[top_indices])
     top_indices = top_indices[order]
-    
+
     top_amps = prior_weights[top_indices]
     top_times = top_indices.astype(np.float32)
 
     # 6. Stack results - only return valid entries
     valid_mask = top_amps > 0.0
     n_valid = np.sum(valid_mask)
-    
+
     if n_valid == 0:
         return np.zeros((0, 2), dtype=np.float32)
-    
+
     pe_prior = np.zeros((n_valid, 2), dtype=np.float32)
     pe_prior[:, 0] = top_times[valid_mask]
     pe_prior[:, 1] = top_amps[valid_mask]
@@ -335,10 +416,12 @@ def prior(waveform: np.ndarray,
     return pe_prior
 
 
-def prior_batch(waveform_batch: torch.Tensor,
-                threshold: float = 0.15,
-                min_distance: int = 5,
-                max_pe: int = max_pe):
+def prior_batch(
+    waveform_batch: torch.Tensor,
+    threshold: float = 0.15,
+    min_distance: int = 5,
+    max_pe: int = max_pe,
+):
     """Clip and cluster deconvolved waveform batch to give prior PE
 
     Parameters
@@ -362,20 +445,22 @@ def prior_batch(waveform_batch: torch.Tensor,
     charge_kernel = torch.ones(1, 1, min_distance, device=waveform_batch.device)
     charge_padding = min_distance // 2
 
-    charge_map = F.conv1d(waveform_batch.unsqueeze(1),
-                          weight=charge_kernel,
-                          padding=charge_padding).squeeze(1)
+    charge_map = F.conv1d(
+        waveform_batch.unsqueeze(1), weight=charge_kernel, padding=charge_padding
+    ).squeeze(1)
 
     # Minimum distance suppression
     kernel_size = min_distance
     padding_val = kernel_size // 2
 
-    s_map_padded = F.max_pool1d(waveform_batch.unsqueeze(1),
-                                kernel_size=kernel_size,
-                                stride=1,
-                                padding=padding_val).squeeze(1)
+    s_map_padded = F.max_pool1d(
+        waveform_batch.unsqueeze(1),
+        kernel_size=kernel_size,
+        stride=1,
+        padding=padding_val,
+    ).squeeze(1)
 
-    nms_mask = (waveform_batch == s_map_padded)
+    nms_mask = waveform_batch == s_map_padded
 
     mask = (waveform_batch >= threshold) & nms_mask
 
@@ -385,21 +470,21 @@ def prior_batch(waveform_batch: torch.Tensor,
 
     k_final = min(max_pe, waveform_batch.shape[-1])
     top_amps, top_indices = torch.topk(prior_weights, k=k_final, dim=-1)
-    
+
     # Stack
     top_times = top_indices.float()
     valid_mask = top_amps > 0.0
 
-    pe_prior_batch = torch.stack(
-        [top_times, top_amps], dim=-1)  # (B, max_hits, 2)
+    pe_prior_batch = torch.stack([top_times, top_amps], dim=-1)  # (B, max_hits, 2)
     pe_prior_batch *= valid_mask.unsqueeze(-1).float()
 
     return pe_prior_batch
 
+
 @timer
-def preprocess_waveform(waveform: np.ndarray,
-                        ser: np.ndarray,
-                        gain: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float]:
+def preprocess_waveform(
+    waveform: np.ndarray, ser: np.ndarray, gain: float
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float]:
     """Preprocess single waveform: pedestal subtraction and deconvolution
 
     Parameters
@@ -418,26 +503,40 @@ def preprocess_waveform(waveform: np.ndarray,
     """
     S = ser_length
 
-    ped = get_pedestal(waveform)
+    # ped = get_pedestal(waveform)
+    ped = get_pedestal_efficient(waveform)
     charge = get_charge(waveform, ped)
     noise_sigma = get_noise(waveform, ped)
     waveform_sub = ped - waveform  # sub baseline and positive
 
     waveform_norm = waveform_sub / gain  # waveform normalization
     cpe = charge / gain  # estimated PE number by charge
+    print(f"CPE: {cpe:.2f}")
+
+    # if cpe < 10.0:
+    #     # Medium PE: RL with reduced iterations
+    #     deconv_norm = lucyddm(waveform_norm, ser, n_iter=1000)
+    #     deconv_same = deconv_norm[S - 1 : S - 1 + window_size]
+    # else:
+    #     # Large PE: full RL
+    #     deconv_norm = lucyddm(waveform_norm, ser)
+    #     deconv_same = deconv_norm[S - 1 : S - 1 + window_size]
 
     deconv_norm = lucyddm(waveform_norm, ser)
-    deconv_same = deconv_norm[S - 1: S - 1 + window_size]
-
+    deconv_same = deconv_norm[S - 1 : S - 1 + window_size]
     pe_prior = prior(deconv_same)
 
     return waveform_sub, waveform_norm, deconv_same, pe_prior, cpe, noise_sigma
 
 
-def preprocess_waveform_batch(waveform_batch: torch.Tensor,
-                                   ids_batch: np.ndarray,
-                                   pmt_params: Dict[int, 'PMTParam'],
-                                   device: str = 'cuda') -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+def preprocess_waveform_batch(
+    waveform_batch: torch.Tensor,
+    ids_batch: np.ndarray,
+    pmt_params: Dict[int, "PMTParam"],
+    device: str = "cuda",
+) -> Tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+]:
     """Preprocess waveform batch: pedestal subtraction and deconvolution
 
     Parameters
@@ -464,7 +563,9 @@ def preprocess_waveform_batch(waveform_batch: torch.Tensor,
     pedestal_batch = get_pedestal_batch(waveform_batch)
     charge_batch = get_charge_batch(waveform_batch, pedestal_batch)
     noise_batch = get_noise_batch(waveform_batch, pedestal_batch)
-    waveform_batch = pedestal_batch.unsqueeze(-1) - waveform_batch  # sub baseline and positive
+    waveform_batch = (
+        pedestal_batch.unsqueeze(-1) - waveform_batch
+    )  # sub baseline and positive
 
     ser_batch = torch.zeros((B, S), dtype=torch.float, device=dev)
     gain_batch = torch.ones((B,), dtype=torch.float, device=dev)
@@ -472,8 +573,7 @@ def preprocess_waveform_batch(waveform_batch: torch.Tensor,
     for i, (_, pid) in enumerate(ids_batch):
         pmt_param = pmt_params.get(pid)
         if pmt_param is None:
-            print(
-                f"Warning: PMT ID {pid} parameters not found. Using default values.")
+            print(f"Warning: PMT ID {pid} parameters not found. Using default values.")
             continue
         else:
             ser = pmt_param.ser.to(dev)
@@ -481,15 +581,112 @@ def preprocess_waveform_batch(waveform_batch: torch.Tensor,
             ser_batch[i, :] = ser
             gain_batch[i] = pmt_param.gain
 
-    waveform_norm_batch = waveform_batch / \
-        gain_batch.unsqueeze(-1)  # waveform normalization
-    
+    waveform_norm_batch = waveform_batch / gain_batch.unsqueeze(
+        -1
+    )  # waveform normalization
+
     cpe_batch = charge_batch / gain_batch  # estimated PE number by charge
 
     deconv_norm_batch = lucyddm_batch(waveform_norm_batch, ser_batch)
-    deconv_same = deconv_norm_batch[:, S - 1: S - 1 + W].contiguous()
+    deconv_same = deconv_norm_batch[:, S - 1 : S - 1 + W].contiguous()
 
     pe_prior_batch = prior_batch(deconv_same)
 
-    return waveform_batch, waveform_norm_batch, deconv_same, pe_prior_batch, cpe_batch, noise_batch
+    return (
+        waveform_batch,
+        waveform_norm_batch,
+        deconv_same,
+        pe_prior_batch,
+        cpe_batch,
+        noise_batch,
+    )
 
+
+# def find_missed_peaks(
+#     residual: np.ndarray,
+#     ser: np.ndarray,
+#     gain: float,
+#     noise_sigma: float,
+#     threshold_snr: float = 3.0,
+#     min_distance: int = 3,
+# ) -> np.ndarray:
+#     """Find missed PE peaks in waveform residual using matched filter.
+#
+#     Uses the gain-scaled SER as the matched filter kernel so that
+#     the response SNR is well above noise for a 1-PE signal.
+#
+#     Parameters
+#     ----------
+#     residual : (W,) ndarray
+#         Waveform residual (observed - model) in ADC counts.
+#     ser : (S,) ndarray
+#         Normalized SER template (sum=1).
+#     gain : float
+#         PMT mode gain in ADC*ns/PE.
+#     noise_sigma : float
+#         Baseline noise RMS in ADC.
+#     threshold_snr : float
+#         SNR threshold for peak detection.
+#     min_distance : int
+#         Minimum separation between peaks in samples.
+#
+#     Returns
+#     -------
+#     ndarray (n, 2)
+#         Candidate PE [time, amplitude] where amplitude is always 1.0.
+#     """
+#     import numpy as np
+#
+#     ser = np.asarray(ser, dtype=np.float64)
+#     residual = np.asarray(residual, dtype=np.float64)
+#
+#     ser_kernel = ser * gain
+#     ser_rev = ser_kernel[::-1]
+#     S = len(ser_rev)
+#     W = len(residual)
+#
+#     n_fft = W + S - 1
+#     corr = np.fft.irfft(
+#         np.fft.rfft(residual, n=n_fft) * np.fft.rfft(ser_rev, n=n_fft), n=n_fft
+#     )
+#     response = corr[S - 1 : S - 1 + W]
+#
+#     kernel_rms = np.sqrt(np.sum(ser_kernel**2))
+#     snr = response / (noise_sigma * kernel_rms)
+#
+#     from scipy.signal import find_peaks
+#
+#     peaks, _ = find_peaks(snr, height=threshold_snr, distance=min_distance)
+#
+#     if len(peaks) == 0:
+#         return np.zeros((0, 2), dtype=np.float32)
+#
+#     n = len(peaks)
+#     result = np.zeros((n, 2), dtype=np.float32)
+#     result[:, 0] = peaks.astype(np.float32)
+#     result[:, 1] = np.ones(n, dtype=np.float32)
+#     return result
+#
+#
+# def remove_coincident_peaks(
+#     existing_times: np.ndarray, candidates: np.ndarray, min_dist: float = 3.0
+# ) -> np.ndarray:
+#     """Drop candidates closer than min_dist to any existing PE time.
+#
+#     Parameters
+#     ----------
+#     existing_times : (N,) ndarray
+#     candidates : (M, 2) ndarray
+#     min_dist : float
+#
+#     Returns
+#     -------
+#     ndarray (K, 2)
+#     """
+#     if len(candidates) == 0 or len(existing_times) == 0:
+#         return candidates
+#     keep = np.ones(len(candidates), dtype=bool)
+#     for i in range(len(candidates)):
+#         if np.any(np.abs(existing_times - candidates[i, 0]) < min_dist):
+#             keep[i] = False
+#     return candidates[keep]

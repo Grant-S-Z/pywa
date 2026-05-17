@@ -43,8 +43,10 @@ $$
 \mathcal{L}_{\text{total}} = \mathcal{L}_{\text{time}} + \mathcal{L}_{\text{charge}}
 $$
 
-- **时间似然**：$\mathcal{L}_{\text{time}} = \sum_{t=t_{\text{begin}}}^{t_{\text{end}}} \log \mathcal{N}\left(V_{\text{obs}}(t) - V_{\text{fit}}(t) \mid 0, \sigma_{\text{baseline}}\right)$
-- **电荷似然**：$\mathcal{L}_{\text{charge}} = \sum_{i=1}^{N} \log \mathcal{N}(Q_i \mid \text{SPE model})$
+- **时间似然**：
+  $$\mathcal{L}_{\text{time}} = \sum_{t=t_{\text{begin}}}^{t_{\text{end}}} \log \mathcal{N}\left(V_{\text{obs}}(t) - V_{\text{fit}}(t) \mid 0, \sigma_{\text{baseline}}\right)$$
+- **电荷似然**：
+  $$\mathcal{L}_{\text{charge}} = \sum_{i=1}^{N} \log \mathcal{N}(Q_i \mid \text{SPE model})$$
 
 ## 项目结构
 
@@ -56,7 +58,7 @@ pywa/
 │   ├── io.py              # ROOT 文件读写
 │   ├── pmtparam.py        # PMT 参数管理
 │   ├── preprocess.py      # 波形预处理
-│   ├── physics.py         # 物理模型（SER 等）
+│   ├── physics.py         # 物理模型（SER）
 │   ├── likelihood.py      # 似然函数定义
 │   ├── fit.py             # 波形拟合
 │   ├── plot.py            # 可视化工具
@@ -64,7 +66,7 @@ pywa/
 ├── data/                  # 数据文件
 │   ├── DN_fit_results_simple.csv    # PMT 增益参数
 │   ├── LSGainList_fsmp.csv          # PMT 增益列表
-│   ├── TimeCalib.csv                # 时间校准
+│   ├── TimeCalib.csv                # 时间刻度
 │   └── run00045887/                 # 实验数据 (ROOT)
 ├── plots/                 # 输出图像
 ├── output/                # 输出数据
@@ -76,22 +78,9 @@ pywa/
 
 ## 安装依赖
 
-### 必需的 Python 包
-
 ```bash
 pip install torch numpy scipy matplotlib uproot awkward iminuit numba
 ```
-
-### 依赖说明
-
-- **torch**: PyTorch
-- **numpy**: 数值计算
-- **scipy**: 科学计算（特殊函数等）
-- **matplotlib**: 可视化
-- **uproot**: ROOT 文件读取
-- **awkward**: 嵌套数组处理
-- **iminuit**: Minuit 优化器（用于拟合）
-- **numba**: JIT 编译加速
 
 ## 快速开始
 
@@ -132,7 +121,7 @@ python main.py
 
 适合大规模数据处理，使用 GPU 加速。
 
-#### 串行模式（详细分析）
+#### 串行模式
 
 ```bash
 python main_serial.py
@@ -224,7 +213,7 @@ fit_result = fitter.fit(n_pe=5)
 支持 CUDA 加速，大幅提升批处理性能：
 
 ```python
-device = 'cuda'  # 或 'cpu'
+device = 'cuda'  # 'cpu', 'mps'
 ```
 
 ### Numba JIT 编译
@@ -236,7 +225,6 @@ device = 'cuda'  # 或 'cpu'
 ### 批处理优化
 
 - 使用 `batch_size` 参数调整批大小以平衡内存和速度
-- 典型值：32-128（取决于 GPU 显存）
 
 
 ---

@@ -39,7 +39,7 @@ def ser_waveform_numpy(x: np.ndarray, amplitude: float, decay: float, sigma: flo
     return f_1 * f_2 * f_3
 
 
-@jit(nopython=True)
+@jit(nopython=True, fastmath=True)
 def ser_waveform_jit(x, amplitude, decay, sigma, t0):
     """Numba-accelerated SER waveform calculation"""
     result = np.zeros((len(x), len(t0)))

@@ -3,7 +3,7 @@ n_entry = 1
 max_pe = 200
 gauss_no = 5
 
-window_size = 900
+window_size = 980
 ser_length = 50
 template_range = 50
 template_size = template_range * 2 + 1
