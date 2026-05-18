@@ -67,14 +67,18 @@ def main():
         print('event_dict.keys():', event_dict.keys())
         for ch_id, waveform in event_dict.items():
             print(f"Processing PMT ID: {ch_id}")
-            gain = pmt_params[ch_id].gain # mean
+            # plot_ser(pmt_params[ch_id])
+            # gain = pmt_params[ch_id].gain # mean
             gm = pmt_params[ch_id].gm # mode
             ser = pmt_params[ch_id].ser.numpy()
             ser /= np.sum(ser)
-            waveform, _, deconv, pe_prior, cpe, noise = preprocess_waveform(waveform, ser, gain)
+            waveform, _, deconv, pe_prior, dpe, cpe, noise = preprocess_waveform(
+                waveform, ser, pmt_params[ch_id],
+                use_greedy=True,
+            )
             ppe = len(pe_prior)
 
-            plot_prior_comparison(waveform, deconv, pe_prior, cpe, ch_id, trigger_no, gain, prior_plot_dir)
+            plot_prior_comparison(waveform, deconv, pe_prior, dpe, cpe, ch_id, trigger_no, gm, prior_plot_dir)
             print(' Prior PE:\n', pe_prior)
 
             # # Build the analytical SER template for model construction
@@ -89,6 +93,26 @@ def main():
 
             nll, params, valid = fitter.fit(ppe, current_prior)
             print(f"  n={ppe}: NLL={nll:.2f}, Valid={valid}")
+
+            # Check amp == lower bound PEs
+            # hit_lower = np.any(params[0::2] == amp_min )
+            # if hit_lower: # 删掉幅度最小的峰，用剩余 n-1 个峰重拟
+            #     amps_n = params[0::2]
+            #     times_n = params[1::2]
+            #     drop_idx = np.argmin(amps_n)
+
+            #     pe_prior1 = np.stack([
+            #         np.delete(times_n, drop_idx),
+            #         np.delete(amps_n,  drop_idx)
+            #     ], axis=1)
+
+            #     nll_n1, params_n1, valid_n1 = fitter.fit(ppe - 1, pe_prior1)
+
+            #     delta_nll = nll_n1 - nll  # 正值表示 n 更好，负值表示 n-1 更好
+            #     if delta_nll < 0: # n-1 的拟合更好，接受删峰
+            #         nll, params, valid = nll_n1, params_n1, valid_n1
+            #         ppe -= 1
+            #         print("== npe - 1 ==")
 
             amps = params[0::2]
             times = params[1::2]

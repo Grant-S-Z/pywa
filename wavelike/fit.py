@@ -6,6 +6,7 @@ from numba import jit
 from .pmtparam import PMTParam
 from .utils import timer
 from .physics import ser_waveform_jit
+from .config import amp_min, amp_max
 
 
 # @jit(nopython=True, fastmath=True)
@@ -259,7 +260,7 @@ class WaveformFitter:
             
             # Amplitude
             start_params.append(a_init)
-            limits.append((0.2, 3.)) # Amplitude > 0
+            limits.append((amp_min, amp_max)) # based on calibrated charge distribution
             error.append(0.1)
             
             # Time
@@ -290,7 +291,7 @@ class WaveformFitter:
             m.errors[i] = err
             
         # Run minimization
-        m.print_level = 1
+        # m.print_level = 1
         m.simplex()
         m.migrad()
         

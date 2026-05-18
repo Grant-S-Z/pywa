@@ -1,9 +1,7 @@
-import math
 import numpy as np
 import torch
 import torch.nn.functional as F
 from typing import Dict, Tuple
-from scipy.special import erf
 from wavelike import PMTParam, timer
 from .config import *
 
@@ -317,7 +315,7 @@ def lucyddm_batch(
     ser_rfft_batch = torch.fft.rfft(ser_batch, n=L)
     ser_mirror_rfft_batch = torch.fft.rfft(ser_mirror_batch, n=L)
 
-    for _ in range(n_iter):
+    for i in range(n_iter):
         # conv_result = torch.clamp(torch.fft.irfft(torch.fft.rfft(deconv_batch, n=L) * ser_rfft_batch, n=L), min=eps)
         conv_result = torch.fft.irfft(
             torch.fft.rfft(deconv_batch, n=L) * ser_rfft_batch, n=L
@@ -418,170 +416,6 @@ def prior(
     return pe_prior
 
 
-def _ser_template(x: np.ndarray, t: float, decay_time: float, sigma: float, gain: float = 1.0) -> np.ndarray:
-    """Compute the SER shape at sample positions x, centred at time t.
-    Uses *gain* as the amplitude parameter, matching _nll_core_dh in fit.py.
-
-    Parameters
-    ----------
-    x : np.ndarray (W,)
-        Sample-index array, e.g. np.arange(W).
-    t : float
-        PE arrival time (sample units).
-    decay_time : float
-        Exponential decay constant tau (sample units).
-    sigma : float
-        Gaussian smearing width (sample units).
-    gain : float
-        Scalar amplitude (gain), default 1.0.  Pass pmt_param.gm to align
-        with the likelihood SER.
-
-    Returns
-    -------
-    np.ndarray (W,)
-        SER shape values at each sample.  Zero outside the cutoff window.
-    """
-    dt = x - t
-    cutoff_left  = -5.0 * sigma
-    cutoff_right =  10.0 * decay_time
-    mask = (dt >= cutoff_left) & (dt <= cutoff_right)
-
-    h = np.zeros(len(x), dtype=np.float64)
-    if not np.any(mask):
-        return h
-
-    a       = gain / (2.0 * decay_time)
-    sig2    = sigma * sigma
-    d2      = 2.0 * decay_time * decay_time
-    denom   = math.sqrt(2.0) * decay_time * sigma
-    dt_m    = dt[mask]
-    h[mask] = a * np.exp(sig2 / d2 - dt_m / decay_time) \
-                * (1.0 + erf((decay_time * dt_m - sig2) / denom))
-    return h
-
-
-def greedy_init(
-    waveform: np.ndarray,
-    pmt_param: "PMTParam",
-    pe_max: int,
-    noise_sigma: float = 1.0,
-    amp_limits: Tuple[float, float] = (0.2, 3.0),
-    min_distance: int = 3,
-) -> np.ndarray:
-    """Greedy Matching Pursuit initialiser for PE times and amplitudes.
-
-    Iteratively finds PE candidates by:
-      1. Locating the sample with the largest residual value.
-      2. Estimating the amplitude at that time via a local least-squares
-         projection onto the SER template (same formula as _nll_core_dh).
-      3. Subtracting the estimated PE contribution from the residual.
-    Yields a set of (time, amplitude) pairs that serve as the initial guess for Minuit.
-
-    Compared to the one-shot matched-filter approach (find_missed_peaks),
-    Greedy MP handles overlapping / near-coincident PEs correctly because
-    each found peak is removed from the residual before the next search.
-
-    Parameters
-    ----------
-    waveform : np.ndarray (W,)
-        Baseline-subtracted, positive waveform in ADC counts.
-    pmt_param : PMTParam
-        PMT parameters for the channel being processed.
-    n_target : int
-        Number of PE candidates to return (= round(cpe) in practice).
-    amp_limits : tuple[float, float], optional
-        (lo, hi) clipping range for the estimated amplitude, matching
-        the Minuit limits in fit.py.  Default (0.2, 3.0).
-    min_distance : int, optional
-        After placing a peak, suppress a window of ±min_distance samples
-        in the residual to avoid re-selecting the same pulse.  Default 3.
-
-    Returns
-    -------
-    np.ndarray (n_found, 2)
-        Rows are [time, amplitude], sorted by time ascending.
-        n_found <= n_target (fewer if the residual is exhausted early).
-    """
-    W           = len(waveform)
-    x           = np.arange(W, dtype=np.float64)
-    decay_time  = pmt_param.decay_time
-    sigma       = pmt_param.sigma
-    gm          = pmt_param.gm
-    # SER support half-widths (in samples) used for local LS window
-    left_pad    = int(math.ceil(5.0 * sigma))
-    right_pad   = int(math.ceil(10.0 * decay_time))
-    amp_lo, amp_hi = amp_limits
-
-    residual = waveform.astype(np.float64).copy()
-    times: list[float] = []
-    amps:  list[float] = []
-
-    for _ in range(pe_max):
-        # ------------------------------------------------------------------ #
-        # Step 1: find the sample index with the largest residual value.
-        # Using argmax on the raw residual rather than a matched-filter
-        # response keeps this O(W) and avoids re-introducing SER bias.
-        # ------------------------------------------------------------------ #
-        t_idx = int(np.argmax(residual))
-        if residual[t_idx] < 5.0 * noise_sigma:
-            # No significant peak above 3σ noise floor: stop searching.
-            print(f"residual maximum: {residual[t_idx]}; snr: {noise_sigma}")
-            break
-
-        t_new = float(t_idx)
-
-        # ------------------------------------------------------------------ #
-        # Step 2: local least-squares amplitude estimate.
-        # Restrict to the SER support window to keep cost O(SER width).
-        # Solve:  min_a || r_local - a * h_local ||²
-        #       → a* = <r_local, h_local> / <h_local, h_local>
-        # ------------------------------------------------------------------ #
-        i0      = max(0, t_idx - left_pad)
-        i1      = min(W, t_idx + right_pad + 1)
-        x_loc   = x[i0:i1]
-        r_loc   = residual[i0:i1]
-        h_loc   = _ser_template(x_loc, t_new, decay_time, sigma, gm)
-
-        hh = np.dot(h_loc, h_loc)
-        if hh < 1e-12:
-            # Degenerate template (bad SER params): fall back to amp=1
-            a_new = 1.0
-        else:
-            a_new = np.dot(r_loc, h_loc) / hh
-
-        a_new = float(np.clip(a_new, amp_lo, amp_hi))
-
-        times.append(t_new)
-        amps.append(a_new)
-
-        # ------------------------------------------------------------------ #
-        # Step 3: subtract this PE's full contribution from the residual.
-        # Only compute over the SER support to save time.
-        # ------------------------------------------------------------------ #
-        i0_full = max(0, t_idx - left_pad)
-        i1_full = min(W, t_idx + right_pad + 1)
-        x_full  = x[i0_full:i1_full]
-        h_full  = _ser_template(x_full, t_new, decay_time, sigma, gm)
-        residual[i0_full:i1_full] -= a_new * h_full
-
-        # Hard-suppress a narrow window around the peak so argmax cannot
-        # re-select the same location due to subtraction residuals.
-        supp_lo = max(0, t_idx - min_distance)
-        supp_hi = min(W, t_idx + min_distance + 1)
-        residual[supp_lo:supp_hi] = np.minimum(residual[supp_lo:supp_hi], 0.0)
-
-    if not times:
-        return np.zeros((0, 2), dtype=np.float32)
-
-    pe_prior = np.zeros((len(times), 2), dtype=np.float32)
-    pe_prior[:, 0] = np.array(times, dtype=np.float32)
-    pe_prior[:, 1] = np.array(amps,  dtype=np.float32)
-
-    # Sort by time so the output order is consistent with the waveform.
-    order = np.argsort(pe_prior[:, 0])
-    return pe_prior[order]
-
-
 def prior_batch(
     waveform_batch: torch.Tensor,
     threshold: float = 0.15,
@@ -649,96 +483,50 @@ def prior_batch(
 
 @timer
 def preprocess_waveform(
-    waveform: np.ndarray,
-    ser: np.ndarray,
-    pmt_param,
-    use_greedy: bool = True,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float, float]:
-    """Preprocess single waveform: pedestal subtraction and deconvolution.
-
-    When *use_greedy* is True and *pmt_param* is provided, the function
-    compares the number of peaks found by RL deconvolution (``ppe``) with
-    ``round(cpe)``.  If ``ppe < round(cpe)``, Greedy Matching Pursuit is
-    used to build a new prior that contains exactly ``round(cpe)`` candidates,
-    recovering near-coincident or low-amplitude PEs that the deconvolution
-    threshold would otherwise miss.
+    waveform: np.ndarray, ser: np.ndarray, gain: float
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float]:
+    """Preprocess single waveform: pedestal subtraction and deconvolution
 
     Parameters
     ----------
-    waveform : np.ndarray (W,)
-        Original waveform in ADC counts.
-    ser : np.ndarray (S,)
-        Normalised single-photoelectron response template.
+    waveform : np.ndarray (W)
+        Original waveform
+    ser : np.ndarray (S)
+        Single photoelectron response
     gain : float
-        Mean gain (ADC*ns / PE), used to compute cpe = charge / gain.
-    pmt_param : PMTParam, optional
-        Full PMT parameter object.  Required when *use_greedy* is True.
-        If None, greedy fallback is silently skipped.
-    use_greedy : bool, optional
-        Enable Greedy MP fallback when ppe < round(cpe).  Default True.
+        Gain value
 
     Returns
     -------
-    waveform_sub : np.ndarray (W,)
-        Baseline-subtracted, positive waveform.
-    waveform_norm : np.ndarray (W,)
-        Gain-normalised waveform (units: PE / sample).
-    deconv_same : np.ndarray (W,)
-        RL-deconvolved waveform aligned to the original time axis.
-    pe_prior : np.ndarray (n_pe, 2)
-        Initial PE candidates [[time, amplitude], ...].
-        Built by greedy MP when ppe < round(cpe), otherwise by prior().
-    cpe : float
-        Charge-based PE count estimate (charge / gain).
-    noise_sigma : float
-        Baseline noise RMS in ADC counts.
+    Tuple[np.ndarray (W), np.ndarray (W), np.ndarray (W), np.ndarray (max_pe, 2), float, float]
+        Tuple of (pedestal-subtracted waveform, normalized waveform, deconvolved waveform, prior PE, estimated PE number by charge, noise sigma)
     """
     S = ser_length
-    gm = pmt_param.gm
-    gain = pmt_param.gain
 
+    # ped = get_pedestal(waveform)
     ped = get_pedestal_efficient(waveform)
     charge = get_charge(waveform, ped)
     noise_sigma = get_noise(waveform, ped)
-    waveform_sub = ped - waveform   # baseline-subtracted, positive
+    waveform_sub = ped - waveform  # sub baseline and positive
 
-    waveform_norm = waveform_sub / gm
-    # cpe = charge / gm # cpe estimated by gm
-    # print(f"CPE (gm): {cpe:.2f}")
-    cpe = charge / gain # cpe estimated by mean with no bias
+    waveform_norm = waveform_sub / gain  # waveform normalization
+    cpe = charge / gain  # estimated PE number by charge
     print(f"CPE: {cpe:.2f}")
+
+    # if cpe < 10.0:
+    #     # Medium PE: RL with reduced iterations
+    #     deconv_norm = lucyddm(waveform_norm, ser, n_iter=1000)
+    #     deconv_same = deconv_norm[S - 1 : S - 1 + window_size]
+    # else:
+    #     # Large PE: full RL
+    #     deconv_norm = lucyddm(waveform_norm, ser)
+    #     deconv_same = deconv_norm[S - 1 : S - 1 + window_size]
 
     deconv_norm = lucyddm(waveform_norm, ser)
     deconv_same = deconv_norm[S - 1 : S - 1 + window_size]
-    pe_prior_deconv = prior(deconv_same)
-    dpe = len(pe_prior_deconv)
-    print(f"DPE (deconv): {dpe}")
+    pe_prior = prior(deconv_same)
 
-    # ---------------------------------------------------------------------- #
-    # Greedy Matching Pursuit fallback
-    # Triggered when the deconvolution underestimates the number of PEs, i.e.
-    # near-coincident or low-amplitude pulses were merged / thresholded away.
-    # ---------------------------------------------------------------------- #
-    if use_greedy and pmt_param is not None and dpe < np.floor(cpe):
-        # Build deconv model so greedy only searches the residual
-        x = np.arange(window_size, dtype=np.float64)
-        model = np.zeros(window_size, dtype=np.float64)
-        for t, a in pe_prior_deconv:
-            model += a * _ser_template(x, t, pmt_param.decay_time, pmt_param.sigma, gm) # TODO: use stored ser
-        residual = waveform_sub.astype(np.float64) - model
-
-        pe_remain_max = max(0, round(cpe + 2 * np.sqrt(cpe)) - dpe)
-        print(f"PPE < n_cpe: running greedy_init on residual, remain maximum {pe_remain_max} PEs.")
-        pe_prior_greedy = greedy_init(residual, pmt_param, pe_max=pe_remain_max, noise_sigma=noise_sigma)
-        print(f"Greedy found {len(pe_prior_greedy)} PE candidates.")
-        if len(pe_prior_greedy) > 0:
-            pe_prior = np.concatenate([pe_prior_deconv, pe_prior_greedy], axis=0)
-        else:
-            pe_prior = pe_prior_deconv
-    else:
-        pe_prior = pe_prior_deconv
-
-    return waveform_sub, waveform_norm, deconv_same, pe_prior, dpe, cpe, noise_sigma
+    return waveform_sub, waveform_norm, deconv_same, pe_prior, cpe, noise_sigma
 
 
 def preprocess_waveform_batch(

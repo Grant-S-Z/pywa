@@ -73,6 +73,7 @@ def plot_prior_comparison(
     waveform: np.ndarray | torch.Tensor,
     deconv_waveform: np.ndarray | torch.Tensor,
     pe_prior: np.ndarray | torch.Tensor,
+    dpe: float,
     cpe: float,
     pmt_id: int,
     trigger_no: int,
@@ -104,14 +105,17 @@ def plot_prior_comparison(
     plt.plot(waveform, color="blue", label="Original Waveform")
     plt.plot(deconv_waveform * gain, color="green", label="Deconvolved Waveform")
     n_pe = 0
-    for time, amplitude in pe_prior:
+    for i, (time, amplitude) in enumerate(pe_prior):
         if time != 0.0:
+            color = "r" if i < dpe else "orange"
             plt.vlines(
-                x=time, ymin=0, ymax=amplitude * gain, color="r", linestyle="--", alpha=0.5
+                x=time, ymin=0, ymax=amplitude * gain, color=color, linestyle="--", alpha=0.5
             )
-            plt.scatter(time, amplitude * gain, color="r", s=20)
+            plt.scatter(time, amplitude * gain, color=color, s=20)
             n_pe += 1
-    plt.plot([], [], color="r", linestyle="--", label=f"Prior NPE: {n_pe}")
+    plt.plot([], [], color="r", linestyle="--", label=f"Deconv PE: {min(dpe, n_pe)}")
+    if n_pe > dpe:
+        plt.plot([], [], color="orange", linestyle="--", label=f"Greedy PE: {n_pe - dpe}")
     plt.scatter([], [], color="white", s=20, label=f"CPE: {cpe:.2f}")
     plt.title(title)
     plt.xlabel("Time (ns)")

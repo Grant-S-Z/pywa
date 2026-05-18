@@ -145,7 +145,7 @@ def _load_pmt_params_dh(ser_csv: str, root_path: str,
 
         gain = float(np.mean(positive))
 
-        kde = gaussian_kde(positive)
+        kde = gaussian_kde(positive, bw_method=0.05) # small bw to keep consistency with the hist
         lo, hi = np.min(positive), np.max(positive)
         pad = 0.1 * (hi - lo)
         grid = np.linspace(lo - pad, hi + pad, 2000)
